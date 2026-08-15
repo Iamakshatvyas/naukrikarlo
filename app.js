@@ -24,6 +24,8 @@ import { adminEmails, firebaseConfig } from "./firebase-config.js";
 const storageKey = "campus-placement-drives-v2";
 const apiKeyStorageKey = "campus-placement-gemini-key";
 const modelStorageKey = "campus-placement-gemini-model";
+const localAiOnlyStorageKey = "campus-placement-local-ai-only";
+const localDataOnlyStorageKey = "campus-placement-local-data-only";
 const hasFirebaseConfig = !Object.values(firebaseConfig).some((value) => String(value).startsWith("PASTE_"));
 const firebaseApp = hasFirebaseConfig ? initializeApp(firebaseConfig) : null;
 const auth = firebaseApp ? getAuth(firebaseApp) : null;
@@ -63,6 +65,8 @@ const elements = {
   topPackage: document.querySelector("#avgPackage"),
   apiKey: document.querySelector("#apiKey"),
   model: document.querySelector("#modelName"),
+  localAiOnly: document.querySelector("#localAiOnly"),
+  localDataOnly: document.querySelector("#localDataOnly"),
   aiStatus: document.querySelector("#aiStatus"),
   signinScreen: document.querySelector("#signinScreen"),
   signinStatus: document.querySelector("#signinStatus"),
@@ -74,13 +78,15 @@ const elements = {
   lock: document.querySelector("#lockBtn"),
 };
 
-let drives = hasFirebaseConfig ? [] : loadDrives();
+let drives = loadDrives();
 let editingDriveId = null;
 let isOwner = false;
 let currentUser = null;
 let unsubscribeDrives = null;
 elements.apiKey.value = localStorage.getItem(apiKeyStorageKey) || "";
 elements.model.value = localStorage.getItem(modelStorageKey) || "gemini-2.5-flash";
+elements.localAiOnly.checked = localStorage.getItem(localAiOnlyStorageKey) !== "false";
+elements.localDataOnly.checked = localStorage.getItem(localDataOnlyStorageKey) !== "false";
 
 function loadDrives() {
   try {
@@ -118,9 +124,10 @@ function setSignedInView(user) {
 }
 
 function listenToDrives() {
-  if (!db || unsubscribeDrives) return;
+  if (!db || unsubscribeDrives || elements.localDataOnly.checked) return;
   const drivesQuery = query(collection(db, "placementDrives"), orderBy("createdAt", "desc"));
   unsubscribeDrives = onSnapshot(drivesQuery, (snapshot) => {
+    if (elements.localDataOnly.checked) return;
     drives = snapshot.docs.map((driveDoc) => ({ id: driveDoc.id, ...driveDoc.data() }));
     render();
   }, (error) => {
@@ -129,16 +136,33 @@ function listenToDrives() {
   });
 }
 
+function stopListeningToDrives() {
+  if (!unsubscribeDrives) return;
+  unsubscribeDrives();
+  unsubscribeDrives = null;
+}
+
+function useLocalDrives() {
+  stopListeningToDrives();
+  drives = loadDrives();
+  render();
+}
+
 async function saveDrive(drive) {
-  if (!db) {
-    if (editingDriveId) {
-      drives = drives.map((item) => item.id === editingDriveId ? { ...drive, id: editingDriveId } : item);
-      editingDriveId = null;
-    } else {
-      drives = [drive, ...drives];
-    }
+  const localSave = () => {
+    const driveToSave = editingDriveId ? { ...drive, id: editingDriveId } : drive;
+    drives = editingDriveId
+      ? drives.map((item) => item.id === editingDriveId ? driveToSave : item)
+      : [driveToSave, ...drives];
+    editingDriveId = null;
     saveDrives();
     render();
+  };
+
+  if (!db || elements.localDataOnly.checked) {
+    localStorage.setItem(localDataOnlyStorageKey, String(elements.localDataOnly.checked));
+    localSave();
+    elements.aiStatus.textContent = "Saved locally in this browser. Firebase was not used.";
     return;
   }
 
@@ -151,17 +175,19 @@ async function saveDrive(drive) {
   if (editingDriveId) {
     await setDoc(doc(db, "placementDrives", editingDriveId), payload, { merge: true });
     editingDriveId = null;
+    elements.aiStatus.textContent = "Updated in Firebase.";
   } else {
     await addDoc(collection(db, "placementDrives"), {
       ...payload,
       createdAt: serverTimestamp(),
       createdBy: currentUser?.email || "unknown",
     });
+    elements.aiStatus.textContent = "Saved in Firebase.";
   }
 }
 
 async function clearAllDrives() {
-  if (!db) {
+  if (!db || elements.localDataOnly.checked) {
     drives = [];
     saveDrives();
     render();
@@ -369,7 +395,7 @@ function beginEdit(driveId) {
 }
 
 async function deleteDrive(driveId) {
-  if (db) {
+  if (db && !elements.localDataOnly.checked) {
     await deleteDoc(doc(db, "placementDrives", driveId));
     return;
   }
@@ -398,6 +424,13 @@ function normalizeAiDrive(aiDrive, message, status, audience) {
 }
 
 async function analyzeWithAi(message, status, audience) {
+  if (elements.localAiOnly.checked) {
+    localStorage.setItem(localAiOnlyStorageKey, "true");
+    elements.aiStatus.textContent = "Used local extractor only. Gemini was not called.";
+    return analyzeMessage(message, status, audience);
+  }
+
+  localStorage.setItem(localAiOnlyStorageKey, "false");
   const apiKey = elements.apiKey.value.trim();
   const model = elements.model.value.trim() || "gemini-2.5-flash";
 
@@ -604,14 +637,28 @@ elements.analyze.addEventListener("click", async () => {
 
   elements.analyze.disabled = true;
   elements.analyze.textContent = "Generating...";
+  let drive;
   try {
-    const drive = await analyzeWithAi(message, elements.status.value, elements.audience.value);
+    drive = await analyzeWithAi(message, elements.status.value, elements.audience.value);
+  } catch (error) {
+    console.error(error);
+    elements.aiStatus.textContent = `AI failed, so I used the local extractor. ${friendlyError(error)}`;
+    drive = analyzeMessage(message, elements.status.value, elements.audience.value);
+  }
+
+  try {
     await saveDrive(drive);
   } catch (error) {
     console.error(error);
-    elements.aiStatus.textContent = "AI failed, so I used the local extractor. Check the API key/model and try again.";
-    const fallbackDrive = analyzeMessage(message, elements.status.value, elements.audience.value);
-    await saveDrive(fallbackDrive);
+    elements.aiStatus.textContent = `Could not save to Firebase, so I saved locally in this browser. ${friendlyError(error)}`;
+    const fallbackDrive = { ...drive, id: editingDriveId || drive.id };
+    const wasEditing = editingDriveId;
+    drives = wasEditing
+      ? drives.map((item) => item.id === wasEditing ? fallbackDrive : item)
+      : [fallbackDrive, ...drives];
+    editingDriveId = null;
+    saveDrives();
+    render();
   } finally {
     elements.analyze.disabled = false;
     elements.analyze.textContent = "Generate placement brief";
@@ -620,6 +667,23 @@ elements.analyze.addEventListener("click", async () => {
   elements.message.value = "";
   render();
 });
+
+function friendlyError(error) {
+  const message = String(error?.message || error || "");
+  if (/permission|PERMISSION_DENIED|Missing or insufficient permissions/i.test(message)) {
+    return "Firebase rejected the write. Check Firestore rules and admin email.";
+  }
+  if (/API key|key not valid|403|PERMISSION_DENIED/i.test(message)) {
+    return "The Gemini key may be invalid, restricted, deleted, or not enabled for this API.";
+  }
+  if (/model|not found|404/i.test(message)) {
+    return "The selected Gemini model may not be available for this key.";
+  }
+  if (/Failed to fetch|NetworkError|CORS/i.test(message)) {
+    return "The browser could not reach the API.";
+  }
+  return "Open the browser console for the exact error.";
+}
 
 elements.seed.addEventListener("click", () => {
   elements.message.value = sampleMessage;
@@ -657,10 +721,15 @@ elements.branch.addEventListener("change", render);
 if (auth) {
   onAuthStateChanged(auth, (user) => {
     setSignedInView(user);
-    if (user) listenToDrives();
-    if (!user && unsubscribeDrives) {
-      unsubscribeDrives();
-      unsubscribeDrives = null;
+    if (user) {
+      if (elements.localDataOnly.checked) {
+        useLocalDrives();
+      } else {
+        listenToDrives();
+      }
+    }
+    if (!user) {
+      stopListeningToDrives();
       drives = [];
       render();
     }
@@ -669,3 +738,16 @@ if (auth) {
   elements.signinStatus.textContent = "Open firebase-config.js and paste your Firebase web app details.";
   setSignedInView(null);
 }
+
+elements.localDataOnly.addEventListener("change", () => {
+  localStorage.setItem(localDataOnlyStorageKey, String(elements.localDataOnly.checked));
+  if (elements.localDataOnly.checked) {
+    useLocalDrives();
+    elements.aiStatus.textContent = "Local save mode is on. Firebase will not overwrite these drafts.";
+  } else {
+    drives = [];
+    render();
+    listenToDrives();
+    elements.aiStatus.textContent = "Firebase save mode is on.";
+  }
+});

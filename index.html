@@ -63,6 +63,14 @@
           <input id="apiKey" type="password" placeholder="AIza...">
           <label for="modelName">Model</label>
           <input id="modelName" type="text" value="gemini-2.5-flash">
+          <label class="check-row" for="localAiOnly">
+            <input id="localAiOnly" type="checkbox" checked>
+            Use local extractor only
+          </label>
+          <label class="check-row" for="localDataOnly">
+            <input id="localDataOnly" type="checkbox" checked>
+            Save locally only
+          </label>
           <p class="helper-text">For laptop testing only. Before making this public, use a backend so the key is not visible in the browser.</p>
         </details>
 
