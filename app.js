@@ -1,0 +1,671 @@
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.17.1/firebase-app.js";
+import {
+  GoogleAuthProvider,
+  getAuth,
+  onAuthStateChanged,
+  signInWithPopup,
+  signOut,
+} from "https://www.gstatic.com/firebasejs/12.17.1/firebase-auth.js";
+import {
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  getDocs,
+  getFirestore,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+  setDoc,
+} from "https://www.gstatic.com/firebasejs/12.17.1/firebase-firestore.js";
+import { adminEmails, firebaseConfig } from "./firebase-config.js";
+
+const storageKey = "campus-placement-drives-v2";
+const apiKeyStorageKey = "campus-placement-gemini-key";
+const modelStorageKey = "campus-placement-gemini-model";
+const hasFirebaseConfig = !Object.values(firebaseConfig).some((value) => String(value).startsWith("PASTE_"));
+const firebaseApp = hasFirebaseConfig ? initializeApp(firebaseConfig) : null;
+const auth = firebaseApp ? getAuth(firebaseApp) : null;
+const db = firebaseApp ? getFirestore(firebaseApp) : null;
+const provider = new GoogleAuthProvider();
+
+const sampleMessage = `Dear Students,
+
+TCS Ninja is conducting an on-campus placement drive for 2026 batch.
+Role: Graduate Trainee / Software Engineer
+Package: 3.36 LPA
+Eligible branches: CSE, IT, ECE
+Criteria: 60% and above in 10th, 12th and B.Tech, no active backlogs.
+Selection process: Online aptitude test, coding test, technical interview and HR interview.
+Skills expected: C, Java or Python, DBMS, OOPs, basic data structures, communication.
+Last date to register: 22 August 2026.
+Location: PAN India.
+Interested eligible students must fill the registration form shared in the group.`;
+
+const defaults = [
+  analyzeMessage(sampleMessage, "Open", "All eligible students"),
+];
+
+const elements = {
+  message: document.querySelector("#tpoMessage"),
+  status: document.querySelector("#manualStatus"),
+  audience: document.querySelector("#manualAudience"),
+  analyze: document.querySelector("#analyzeBtn"),
+  seed: document.querySelector("#seedBtn"),
+  clear: document.querySelector("#clearBtn"),
+  list: document.querySelector("#driveList"),
+  template: document.querySelector("#driveTemplate"),
+  search: document.querySelector("#searchInput"),
+  branch: document.querySelector("#branchFilter"),
+  total: document.querySelector("#totalCount"),
+  open: document.querySelector("#openCount"),
+  topPackage: document.querySelector("#avgPackage"),
+  apiKey: document.querySelector("#apiKey"),
+  model: document.querySelector("#modelName"),
+  aiStatus: document.querySelector("#aiStatus"),
+  signinScreen: document.querySelector("#signinScreen"),
+  signinStatus: document.querySelector("#signinStatus"),
+  googleLogin: document.querySelector("#googleLoginBtn"),
+  logout: document.querySelector("#logoutBtn"),
+  userChip: document.querySelector("#userChip"),
+  studentPanel: document.querySelector("#studentPanel"),
+  adminPanel: document.querySelector("#adminPanel"),
+  lock: document.querySelector("#lockBtn"),
+};
+
+let drives = hasFirebaseConfig ? [] : loadDrives();
+let editingDriveId = null;
+let isOwner = false;
+let currentUser = null;
+let unsubscribeDrives = null;
+elements.apiKey.value = localStorage.getItem(apiKeyStorageKey) || "";
+elements.model.value = localStorage.getItem(modelStorageKey) || "gemini-2.5-flash";
+
+function loadDrives() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) || "null");
+    return Array.isArray(saved) && saved.length ? saved : defaults;
+  } catch {
+    return defaults;
+  }
+}
+
+function saveDrives() {
+  localStorage.setItem(storageKey, JSON.stringify(drives));
+}
+
+function setOwnerMode(enabled) {
+  isOwner = enabled;
+  document.body.classList.toggle("owner-mode", enabled);
+  elements.studentPanel.hidden = enabled;
+  elements.adminPanel.hidden = !enabled;
+  elements.userChip.textContent = currentUser ? currentUser.email : "Signed in";
+  if (!enabled) {
+    editingDriveId = null;
+    elements.message.value = "";
+    elements.analyze.textContent = "Generate placement brief";
+  }
+  render();
+}
+
+function setSignedInView(user) {
+  currentUser = user;
+  document.body.classList.toggle("signed-in", Boolean(user));
+  elements.signinScreen.hidden = Boolean(user);
+  elements.userChip.textContent = user ? user.email : "Signed out";
+  setOwnerMode(Boolean(user && adminEmails.map((email) => email.toLowerCase()).includes(user.email.toLowerCase())));
+}
+
+function listenToDrives() {
+  if (!db || unsubscribeDrives) return;
+  const drivesQuery = query(collection(db, "placementDrives"), orderBy("createdAt", "desc"));
+  unsubscribeDrives = onSnapshot(drivesQuery, (snapshot) => {
+    drives = snapshot.docs.map((driveDoc) => ({ id: driveDoc.id, ...driveDoc.data() }));
+    render();
+  }, (error) => {
+    console.error(error);
+    elements.signinStatus.textContent = "Could not load placement drives. Check Firestore rules and config.";
+  });
+}
+
+async function saveDrive(drive) {
+  if (!db) {
+    if (editingDriveId) {
+      drives = drives.map((item) => item.id === editingDriveId ? { ...drive, id: editingDriveId } : item);
+      editingDriveId = null;
+    } else {
+      drives = [drive, ...drives];
+    }
+    saveDrives();
+    render();
+    return;
+  }
+
+  const payload = {
+    ...drive,
+    updatedAt: serverTimestamp(),
+    updatedBy: currentUser?.email || "unknown",
+  };
+
+  if (editingDriveId) {
+    await setDoc(doc(db, "placementDrives", editingDriveId), payload, { merge: true });
+    editingDriveId = null;
+  } else {
+    await addDoc(collection(db, "placementDrives"), {
+      ...payload,
+      createdAt: serverTimestamp(),
+      createdBy: currentUser?.email || "unknown",
+    });
+  }
+}
+
+async function clearAllDrives() {
+  if (!db) {
+    drives = [];
+    saveDrives();
+    render();
+    return;
+  }
+  const snapshot = await getDocs(collection(db, "placementDrives"));
+  await Promise.all(snapshot.docs.map((driveDoc) => deleteDoc(doc(db, "placementDrives", driveDoc.id))));
+}
+
+function clean(text) {
+  return String(text || "")
+    .replace(/[*_`~]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function matchFirst(text, patterns, fallback = "Not mentioned") {
+  for (const pattern of patterns) {
+    const found = text.match(pattern);
+    if (found) return clean(found[1] || found[0]).replace(/[.;,]$/, "");
+  }
+  return fallback;
+}
+
+function titleCase(text) {
+  return clean(text).replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function getLines(message) {
+  return message.split(/\n+/).map(clean).filter(Boolean);
+}
+
+function stripUrls(message) {
+  return message.replace(/https?:\/\/\S+/gi, "");
+}
+
+function extractFieldBlock(message, label) {
+  const lines = getLines(message);
+  const start = lines.findIndex((line) => new RegExp(`^${label}\\s*:`, "i").test(line));
+  if (start === -1) return "";
+
+  const sameLine = lines[start].replace(new RegExp(`^${label}\\s*:\\s*`, "i"), "").trim();
+  const values = sameLine ? [sameLine] : [];
+
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^[A-Za-z][A-Za-z\s/()-]{2,32}\s*:/.test(line)) break;
+    values.push(line.replace(/^\d+\.\s*/, ""));
+  }
+
+  return clean(values.join("; "));
+}
+
+function extractCompany(message) {
+  const lines = getLines(message);
+  const titleLine = lines.find((line) => />>.+<</.test(line));
+  if (titleLine) {
+    const title = titleLine.replace(/[<>|]/g, " ").split(/\bbatch\b/i)[0];
+    const cleaned = clean(title);
+    if (cleaned) return titleCase(cleaned);
+  }
+
+  const companyLine = lines.find((line) => /^[A-Z][A-Za-z0-9&.\s-]{2,50}\s+(is|are)\s+/i.test(line));
+  if (companyLine) {
+    return titleCase(companyLine.split(/\s+(is|are)\s+/i)[0]);
+  }
+
+  const messageWithoutUrls = stripUrls(message);
+  const fromKnown = messageWithoutUrls.match(/\b(TCS|Infosys|Wipro|Accenture|Capgemini|Cognizant|Deloitte|IBM|HCL|Tech Mahindra|Amazon|Microsoft|LTIMindtree|Hexaware|Zoho)\b/i);
+  if (fromKnown) return titleCase(fromKnown[0]);
+
+  const driveLine = lines.find((line) => /drive|visiting|hiring|recruitment|campus/i.test(line));
+  if (driveLine) {
+    return clean(driveLine.replace(/dear students,?/i, "").split(/\bis\b|\bare\b|\bwill\b|\bvisiting\b|\bhiring\b/i)[0]) || "Company not detected";
+  }
+  return lines[0] ? lines[0].slice(0, 42) : "Company not detected";
+}
+
+function extractBranches(message) {
+  const branches = [];
+  const branchMap = [
+    ["CSE", /\b(CSE|CS|Computer Science)\b/i],
+    ["IT", /\bIT\b|Information Technology/i],
+    ["ECE", /\bECE\b|Electronics/i],
+    ["ECC", /\bECC\b/i],
+    ["EEE", /\bEEE\b|Electrical/i],
+    ["MCA", /\bMCA\b/i],
+    ["Mechanical", /\bMECH|Mechanical/i],
+    ["Civil", /\bCivil\b/i],
+  ];
+  branchMap.forEach(([label, pattern]) => {
+    if (pattern.test(message)) branches.push(label);
+  });
+  return branches.length ? [...new Set(branches)].join(", ") : "Check official message";
+}
+
+function extractPackage(message) {
+  const ctcBlock = extractFieldBlock(message, "CTC");
+  if (ctcBlock) {
+    const packages = [...ctcBlock.matchAll(/([A-Za-z\s()/-]*?(?:APE|ASA|Trainee|Intern)?[A-Za-z\s()/-]*?[-:]\s*)?([0-9.]+\s*(?:LPA|lakhs?|K|per month|pm))/gi)]
+      .map((match) => clean(`${match[1] || ""}${match[2]}`))
+      .filter(Boolean);
+    if (packages.length) return packages.join("; ");
+  }
+
+  return matchFirst(message, [
+    /(?:package|ctc|salary|stipend)\s*[:\-]?\s*([0-9.]+\s*(?:lpa|lakhs?|k|per month|pm|ctc))/i,
+    /([0-9.]+\s*(?:lpa|lakhs?)\b)/i,
+  ], "Not mentioned");
+}
+
+function extractRole(message) {
+  const designation = extractFieldBlock(message, "Job Designation");
+  if (designation) {
+    return designation
+      .replace(/\b\d+\.\s*/g, "")
+      .replace(/\s*;\s*/g, "; ");
+  }
+
+  return matchFirst(message, [
+    /(?:role|profile|designation|position|job title)\s*[:\-]?\s*([A-Za-z0-9 /()&+-]{3,})/i,
+    /(software engineer|graduate trainee|system engineer|analyst|developer|associate|trainee engineer|business analyst|data analyst|support engineer)/i,
+  ], "Role to be confirmed");
+}
+
+function extractDeadline(message) {
+  return matchFirst(message, [
+    /(?:last date|deadline|register by|apply by|before)\s*[:\-]?\s*([^\n]+)/i,
+    /(\d{1,2}\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*\d{2,4})/i,
+    /(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})/i,
+  ], "Not mentioned");
+}
+
+function extractProcess(message) {
+  const process = [];
+  [
+    ["Aptitude", /aptitude|quant|logical|verbal/i],
+    ["Technical test", /technical test/i],
+    ["Coding", /coding|programming|data structures|dsa/i],
+    ["Technical interview", /technical interview|technical round|tr/i],
+    ["Personal interview", /personal interview|pi\b/i],
+    ["HR interview", /hr interview|hr round/i],
+    ["Group discussion", /group discussion|gd/i],
+  ].forEach(([label, pattern]) => {
+    if (pattern.test(message)) process.push(label);
+  });
+  return process;
+}
+
+function buildPrep(message, role, process) {
+  const prep = new Set();
+  if (/aptitude|quant|logical|verbal/i.test(message)) {
+    ["Quantitative aptitude", "Logical reasoning", "Verbal ability"].forEach((item) => prep.add(item));
+  }
+  if (/coding|software|developer|engineer|java|python|c\+\+|dbms|oops|data structures|dsa/i.test(`${message} ${role}`)) {
+    ["Basic coding", "OOPs", "DBMS", "Data structures", "Resume projects"].forEach((item) => prep.add(item));
+  }
+  if (/no-code|paas|platform|fintech|lending|bfsi|solution analyst/i.test(`${message} ${role}`)) {
+    ["Fintech basics", "SQL basics", "Platform workflows", "Requirement analysis"].forEach((item) => prep.add(item));
+  }
+  if (/data analyst|analytics|sql|excel|power bi/i.test(`${message} ${role}`)) {
+    ["SQL", "Excel basics", "Data interpretation", "Dashboard project"].forEach((item) => prep.add(item));
+  }
+  if (/communication|hr|interview/i.test(message) || process.length) {
+    ["Self introduction", "HR questions", "Company research"].forEach((item) => prep.add(item));
+  }
+  if (!prep.size) {
+    ["Read the role carefully", "Revise resume projects", "Practice aptitude", "Prepare HR answers"].forEach((item) => prep.add(item));
+  }
+  return [...prep].slice(0, 8);
+}
+
+function analyzeMessage(message, status, audience) {
+  const role = extractRole(message);
+  const process = extractProcess(message);
+  const company = extractCompany(message);
+  const branches = extractBranches(message);
+  const packageText = extractPackage(message);
+
+  return {
+    id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
+    company,
+    role,
+    packageText,
+    branches,
+    deadline: extractDeadline(message),
+    status,
+    audience,
+    summary: `${company} is hiring for ${role.toLowerCase()}. The drive is for eligible students to enter a trainee or intern track, with final selection depending on the official criteria, rounds and internship/job conditions mentioned by the TPO.`,
+    prep: buildPrep(message, role, process),
+    original: message,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function beginEdit(driveId) {
+  const drive = drives.find((item) => item.id === driveId);
+  if (!drive) return;
+  editingDriveId = driveId;
+  elements.message.value = drive.original;
+  elements.status.value = drive.status;
+  elements.audience.value = drive.audience;
+  elements.analyze.textContent = "Update placement brief";
+  elements.message.focus();
+}
+
+async function deleteDrive(driveId) {
+  if (db) {
+    await deleteDoc(doc(db, "placementDrives", driveId));
+    return;
+  }
+  drives = drives.filter((drive) => drive.id !== driveId);
+  saveDrives();
+  render();
+}
+
+function normalizeAiDrive(aiDrive, message, status, audience) {
+  const fallback = analyzeMessage(message, status, audience);
+  const prep = Array.isArray(aiDrive.prep) ? aiDrive.prep.filter(Boolean) : fallback.prep;
+
+  return {
+    ...fallback,
+    company: clean(aiDrive.company) || fallback.company,
+    role: clean(aiDrive.role) || fallback.role,
+    packageText: clean(aiDrive.packageText) || fallback.packageText,
+    branches: clean(aiDrive.branches) || fallback.branches,
+    deadline: clean(aiDrive.deadline) || fallback.deadline,
+    summary: clean(aiDrive.summary) || fallback.summary,
+    prep: prep.length ? prep.slice(0, 8) : fallback.prep,
+    original: message,
+    status,
+    audience,
+  };
+}
+
+async function analyzeWithAi(message, status, audience) {
+  const apiKey = elements.apiKey.value.trim();
+  const model = elements.model.value.trim() || "gemini-2.5-flash";
+
+  if (!apiKey) {
+    elements.aiStatus.textContent = "No API key found, so I used the local extractor.";
+    return analyzeMessage(message, status, audience);
+  }
+
+  localStorage.setItem(apiKeyStorageKey, apiKey);
+  localStorage.setItem(modelStorageKey, model);
+  elements.aiStatus.textContent = "Gemini is reading the TPO message...";
+
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              text: `Extract campus placement drive details for Indian college students. Return only valid JSON with these exact keys: company, role, packageText, branches, deadline, summary, prep. The prep value must be an array of 5 to 8 short topics students should prepare. Keep unknown details as "Not mentioned".\n\nTPO message:\n${message}`,
+            },
+          ],
+        },
+      ],
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: "object",
+          properties: {
+            company: { type: "string" },
+            role: { type: "string" },
+            packageText: { type: "string" },
+            branches: { type: "string" },
+            deadline: { type: "string" },
+            summary: { type: "string" },
+            prep: {
+              type: "array",
+              items: { type: "string" },
+            },
+          },
+          required: ["company", "role", "packageText", "branches", "deadline", "summary", "prep"],
+        },
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || `Gemini request failed with status ${response.status}`);
+  }
+
+  const data = await response.json();
+  const outputText = data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") || "";
+  const aiDrive = JSON.parse(outputText);
+  elements.aiStatus.textContent = "Gemini brief generated successfully.";
+  return normalizeAiDrive(aiDrive, message, status, audience);
+}
+
+async function analyzeWithOpenAi(message, status, audience) {
+  const apiKey = elements.apiKey.value.trim();
+  const model = elements.model.value.trim() || "gpt-4.1-mini";
+
+  if (!apiKey) {
+    elements.aiStatus.textContent = "No API key found, so I used the local extractor.";
+    return analyzeMessage(message, status, audience);
+  }
+
+  localStorage.setItem(apiKeyStorageKey, apiKey);
+  localStorage.setItem(modelStorageKey, model);
+  elements.aiStatus.textContent = "OpenAI is reading the TPO message...";
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      input: [
+        {
+          role: "system",
+          content: "Extract campus placement drive details for Indian college students. Return only valid JSON.",
+        },
+        {
+          role: "user",
+          content: `Read this TPO message and return JSON with these exact keys: company, role, packageText, branches, deadline, summary, prep. The prep value must be an array of 5 to 8 short topics students should prepare. Keep unknown details as "Not mentioned".\n\nTPO message:\n${message}`,
+        },
+      ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "placement_drive",
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              company: { type: "string" },
+              role: { type: "string" },
+              packageText: { type: "string" },
+              branches: { type: "string" },
+              deadline: { type: "string" },
+              summary: { type: "string" },
+              prep: {
+                type: "array",
+                items: { type: "string" },
+              },
+            },
+            required: ["company", "role", "packageText", "branches", "deadline", "summary", "prep"],
+          },
+        },
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || `AI request failed with status ${response.status}`);
+  }
+
+  const data = await response.json();
+  const outputText = data.output_text || data.output?.flatMap((item) => item.content || []).map((item) => item.text).join("");
+  const aiDrive = JSON.parse(outputText);
+  elements.aiStatus.textContent = "AI brief generated successfully.";
+  return normalizeAiDrive(aiDrive, message, status, audience);
+}
+
+function packageNumber(packageText) {
+  const number = packageText.match(/[0-9.]+/);
+  return number ? Number(number[0]) : 0;
+}
+
+function render() {
+  const query = elements.search.value.toLowerCase();
+  const branch = elements.branch.value;
+  const filtered = drives.filter((drive) => {
+    const haystack = `${drive.company} ${drive.role} ${drive.branches} ${drive.packageText} ${drive.prep.join(" ")}`.toLowerCase();
+    const branchMatch = branch === "all" || drive.branches.toLowerCase().includes(branch);
+    return haystack.includes(query) && branchMatch;
+  });
+
+  elements.total.textContent = String(drives.length);
+  elements.open.textContent = String(drives.filter((drive) => drive.status !== "Closed").length);
+  const top = drives.reduce((best, drive) => Math.max(best, packageNumber(drive.packageText)), 0);
+  elements.topPackage.textContent = top ? `${top} LPA` : "--";
+
+  elements.list.replaceChildren();
+  if (!filtered.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = "No placement drives match this view yet.";
+    elements.list.append(empty);
+    return;
+  }
+
+  filtered.forEach((drive) => {
+    const node = elements.template.content.cloneNode(true);
+    node.querySelector(".company").textContent = drive.company;
+    node.querySelector(".role").textContent = drive.role;
+    node.querySelector(".drive-status").textContent = drive.status;
+    node.querySelector(".package").textContent = drive.packageText;
+    node.querySelector(".branches").textContent = drive.branches;
+    node.querySelector(".deadline").textContent = drive.deadline;
+    node.querySelector(".summary").textContent = drive.summary;
+    node.querySelector(".original").textContent = drive.original;
+    if (isOwner) {
+      const actions = document.createElement("div");
+      actions.className = "card-actions";
+
+      const editButton = document.createElement("button");
+      editButton.type = "button";
+      editButton.textContent = "Edit";
+      editButton.addEventListener("click", () => beginEdit(drive.id));
+
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.textContent = "Delete";
+      deleteButton.className = "danger-button";
+      deleteButton.addEventListener("click", () => deleteDrive(drive.id));
+
+      actions.append(editButton, deleteButton);
+      node.querySelector(".drive-card").append(actions);
+    }
+    const prepList = node.querySelector(".prep-list");
+    drive.prep.forEach((item) => {
+      const li = document.createElement("li");
+      li.textContent = item;
+      prepList.append(li);
+    });
+    elements.list.append(node);
+  });
+}
+
+elements.analyze.addEventListener("click", async () => {
+  const message = elements.message.value.trim();
+  if (!message) {
+    elements.message.focus();
+    return;
+  }
+
+  elements.analyze.disabled = true;
+  elements.analyze.textContent = "Generating...";
+  try {
+    const drive = await analyzeWithAi(message, elements.status.value, elements.audience.value);
+    await saveDrive(drive);
+  } catch (error) {
+    console.error(error);
+    elements.aiStatus.textContent = "AI failed, so I used the local extractor. Check the API key/model and try again.";
+    const fallbackDrive = analyzeMessage(message, elements.status.value, elements.audience.value);
+    await saveDrive(fallbackDrive);
+  } finally {
+    elements.analyze.disabled = false;
+    elements.analyze.textContent = "Generate placement brief";
+  }
+
+  elements.message.value = "";
+  render();
+});
+
+elements.seed.addEventListener("click", () => {
+  elements.message.value = sampleMessage;
+  elements.message.focus();
+});
+
+elements.clear.addEventListener("click", async () => {
+  await clearAllDrives();
+});
+
+elements.lock.addEventListener("click", () => {
+  setOwnerMode(false);
+});
+
+elements.googleLogin.addEventListener("click", async () => {
+  if (!auth) {
+    elements.signinStatus.textContent = "Add your Firebase config first, then reload this page.";
+    return;
+  }
+  try {
+    await signInWithPopup(auth, provider);
+  } catch (error) {
+    console.error(error);
+    elements.signinStatus.textContent = "Google login failed. Check that Google provider is enabled in Firebase Auth.";
+  }
+});
+
+elements.logout.addEventListener("click", async () => {
+  if (auth) await signOut(auth);
+});
+
+elements.search.addEventListener("input", render);
+elements.branch.addEventListener("change", render);
+
+if (auth) {
+  onAuthStateChanged(auth, (user) => {
+    setSignedInView(user);
+    if (user) listenToDrives();
+    if (!user && unsubscribeDrives) {
+      unsubscribeDrives();
+      unsubscribeDrives = null;
+      drives = [];
+      render();
+    }
+  });
+} else {
+  elements.signinStatus.textContent = "Open firebase-config.js and paste your Firebase web app details.";
+  setSignedInView(null);
+}

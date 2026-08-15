@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Placement Drive Board</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <section class="signin-screen" id="signinScreen">
+    <div class="signin-box">
+      <p class="eyebrow">Campus Placement Hub</p>
+      <h1>Sign in to view drives</h1>
+      <p>Use your Google account to access placement updates.</p>
+      <button class="wide-button" id="googleLoginBtn" type="button">Continue with Google</button>
+      <p class="helper-text" id="signinStatus">Firebase is not connected until your project details are added.</p>
+    </div>
+  </section>
+
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Campus Placement Hub</p>
+        <h1>Drive Board</h1>
+      </div>
+      <div class="top-actions">
+        <button class="icon-button admin-only" id="seedBtn" type="button" title="Load sample message" aria-label="Load sample message">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18"/></svg>
+        </button>
+        <button class="primary-button admin-only" id="clearBtn" type="button">Clear saved drives</button>
+        <span class="user-chip" id="userChip">Signed in</span>
+        <button class="primary-button" id="logoutBtn" type="button">Sign out</button>
+      </div>
+    </header>
+
+    <section class="dashboard">
+      <aside class="input-panel locked-panel" id="studentPanel" aria-label="Student access">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Student view</p>
+            <h2>Placement updates</h2>
+          </div>
+          <span class="status-pill">Read only</span>
+        </div>
+        <p class="helper-text">You can search, filter and read every drive. Only the owner account can add or edit TPO messages.</p>
+      </aside>
+
+      <aside class="input-panel admin-only" id="adminPanel" aria-label="Add placement drive">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Admin input</p>
+            <h2>Paste TPO message</h2>
+          </div>
+          <span class="status-pill">Owner mode</span>
+        </div>
+
+        <details class="ai-settings">
+          <summary>AI settings</summary>
+          <label for="apiKey">Gemini API key</label>
+          <input id="apiKey" type="password" placeholder="AIza...">
+          <label for="modelName">Model</label>
+          <input id="modelName" type="text" value="gemini-2.5-flash">
+          <p class="helper-text">For laptop testing only. Before making this public, use a backend so the key is not visible in the browser.</p>
+        </details>
+
+        <label for="tpoMessage">Official message</label>
+        <textarea id="tpoMessage" spellcheck="true" placeholder="Paste the TPO WhatsApp/mail message here..."></textarea>
+
+        <div class="form-grid">
+          <div>
+            <label for="manualStatus">Drive status</label>
+            <select id="manualStatus">
+              <option>Open</option>
+              <option>Closing soon</option>
+              <option>Closed</option>
+            </select>
+          </div>
+          <div>
+            <label for="manualAudience">Visible for</label>
+            <select id="manualAudience">
+              <option>All eligible students</option>
+              <option>Final year</option>
+              <option>Pre-final year</option>
+            </select>
+          </div>
+        </div>
+
+        <button class="wide-button" id="analyzeBtn" type="button">Generate placement brief</button>
+        <p class="helper-text" id="aiStatus">Add an API key in AI settings to use real AI. Without it, the page uses the local extractor.</p>
+        <button class="text-button" id="lockBtn" type="button">Lock admin tools</button>
+      </aside>
+
+      <section class="board-area">
+        <div class="controls">
+          <div class="search-wrap">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input id="searchInput" type="search" placeholder="Search company, role, branch, skill...">
+          </div>
+          <select id="branchFilter" aria-label="Filter by branch">
+            <option value="all">All branches</option>
+            <option value="cse">CSE / IT</option>
+            <option value="ece">ECE</option>
+            <option value="eee">EEE</option>
+            <option value="mech">Mechanical</option>
+            <option value="civil">Civil</option>
+          </select>
+        </div>
+
+        <div class="stats-row" aria-label="Placement statistics">
+          <div><strong id="totalCount">0</strong><span>Total drives</span></div>
+          <div><strong id="openCount">0</strong><span>Open now</span></div>
+          <div><strong id="avgPackage">--</strong><span>Top package shown</span></div>
+        </div>
+
+        <div class="drive-list" id="driveList" aria-live="polite"></div>
+      </section>
+    </section>
+  </main>
+
+  <template id="driveTemplate">
+    <article class="drive-card">
+      <div class="card-top">
+        <div>
+          <p class="company"></p>
+          <h3 class="role"></h3>
+        </div>
+        <span class="drive-status"></span>
+      </div>
+      <div class="meta-grid">
+        <div><span>Package</span><strong class="package"></strong></div>
+        <div><span>Eligible</span><strong class="branches"></strong></div>
+        <div><span>Deadline</span><strong class="deadline"></strong></div>
+      </div>
+      <div class="section-block">
+        <h4>What the job is about</h4>
+        <p class="summary"></p>
+      </div>
+      <div class="section-block">
+        <h4>What to prepare</h4>
+        <ul class="prep-list"></ul>
+      </div>
+      <details>
+        <summary>Original TPO message</summary>
+        <p class="original"></p>
+      </details>
+    </article>
+  </template>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
