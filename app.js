@@ -85,7 +85,7 @@ let currentUser = null;
 let unsubscribeDrives = null;
 elements.apiKey.value = localStorage.getItem(apiKeyStorageKey) || "";
 elements.model.value = localStorage.getItem(modelStorageKey) || "gemini-2.5-flash";
-elements.localAiOnly.checked = localStorage.getItem(localAiOnlyStorageKey) !== "false";
+elements.localAiOnly.checked = localStorage.getItem(localAiOnlyStorageKey) === "true";
 elements.localDataOnly.checked = localStorage.getItem(localDataOnlyStorageKey) === "true";
 
 function loadDrives() {
@@ -454,7 +454,7 @@ async function analyzeWithAi(message, status, audience) {
           role: "user",
           parts: [
             {
-              text: `Extract campus placement drive details for Indian college students. Return only valid JSON with these exact keys: company, role, packageText, branches, deadline, summary, prep. The prep value must be an array of 5 to 8 short topics students should prepare. Keep unknown details as "Not mentioned".\n\nTPO message:\n${message}`,
+              text: `Extract campus placement drive details for Indian college students. Return only valid JSON with these exact keys: company, role, packageText, branches, deadline, summary, prep. The prep value must be an array of 5 to 8 specific topics, skills, technologies, or interview rounds the student should prepare, based EXACTLY on what the company wants and the selection process mentioned in the message. Keep unknown details as "Not mentioned".\n\nTPO message:\n${message}`,
             },
           ],
         },
