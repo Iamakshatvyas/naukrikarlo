@@ -74,10 +74,32 @@
           <p class="helper-text">For laptop testing only. Before making this public, use a backend so the key is not visible in the browser.</p>
         </details>
 
-        <label for="tpoMessage">Official message</label>
-        <textarea id="tpoMessage" spellcheck="true" placeholder="Paste the TPO WhatsApp/mail message here..."></textarea>
+        <div id="step1">
+          <label for="tpoMessage">Official message</label>
+          <textarea id="tpoMessage" spellcheck="true" placeholder="Paste the TPO WhatsApp/mail message here..."></textarea>
+          <button class="wide-button" id="analyzeBtn" type="button" style="margin-top: 14px;">Generate placement brief</button>
+        </div>
 
-        <div class="form-grid">
+        <div id="step2" hidden>
+          <label for="editCompany">Company</label>
+          <input id="editCompany" type="text">
+          
+          <label for="editRole">Role</label>
+          <input id="editRole" type="text">
+          
+          <label for="editPackage">Package</label>
+          <input id="editPackage" type="text">
+          
+          <label for="editBranches">Eligible Branches</label>
+          <input id="editBranches" type="text">
+          
+          <label for="editSummary">Job Summary</label>
+          <textarea id="editSummary" spellcheck="true" style="min-height: 100px;"></textarea>
+          
+          <label for="editPrep">What to prepare (one per line)</label>
+          <textarea id="editPrep" spellcheck="true" style="min-height: 150px;"></textarea>
+
+        <div class="form-grid" id="audienceGrid" hidden>
           <div>
             <label for="manualAudience">Visible for</label>
             <select id="manualAudience">
@@ -88,7 +110,10 @@
           </div>
         </div>
 
-        <button class="wide-button" id="analyzeBtn" type="button">Generate placement brief</button>
+        <button class="wide-button" id="saveBtn" type="button" style="margin-top: 14px; background: var(--green-dark);" hidden>Save placement drive</button>
+        <button class="text-button" id="cancelEditBtn" type="button" hidden>Cancel</button>
+        </div>
+        
         <p class="helper-text" id="aiStatus">Add an API key in AI settings to use real AI. Without it, the page uses the local extractor.</p>
         <button class="text-button" id="lockBtn" type="button">Lock admin tools</button>
       </aside>

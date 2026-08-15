@@ -50,9 +50,20 @@ const defaults = [
 ];
 
 const elements = {
+  step1: document.querySelector("#step1"),
+  step2: document.querySelector("#step2"),
+  audienceGrid: document.querySelector("#audienceGrid"),
   message: document.querySelector("#tpoMessage"),
+  editCompany: document.querySelector("#editCompany"),
+  editRole: document.querySelector("#editRole"),
+  editPackage: document.querySelector("#editPackage"),
+  editBranches: document.querySelector("#editBranches"),
+  editSummary: document.querySelector("#editSummary"),
+  editPrep: document.querySelector("#editPrep"),
   audience: document.querySelector("#manualAudience"),
   analyze: document.querySelector("#analyzeBtn"),
+  save: document.querySelector("#saveBtn"),
+  cancelEdit: document.querySelector("#cancelEditBtn"),
   seed: document.querySelector("#seedBtn"),
   clear: document.querySelector("#clearBtn"),
   list: document.querySelector("#driveList"),
@@ -99,6 +110,31 @@ function saveDrives() {
   localStorage.setItem(storageKey, JSON.stringify(drives));
 }
 
+function showStep1() {
+  elements.step1.hidden = false;
+  elements.step2.hidden = true;
+  elements.audienceGrid.hidden = true;
+  elements.save.hidden = true;
+  elements.cancelEdit.hidden = true;
+  elements.analyze.textContent = "Generate placement brief";
+}
+
+function showStep2(drive) {
+  elements.step1.hidden = true;
+  elements.step2.hidden = false;
+  elements.audienceGrid.hidden = false;
+  elements.save.hidden = false;
+  elements.cancelEdit.hidden = false;
+  
+  elements.editCompany.value = drive.company || "";
+  elements.editRole.value = drive.role || "";
+  elements.editPackage.value = drive.packageText || "";
+  elements.editBranches.value = drive.branches || "";
+  elements.editSummary.value = drive.summary || "";
+  elements.editPrep.value = (drive.prep || []).join("\n");
+  elements.audience.value = drive.audience || "All eligible students";
+}
+
 function setOwnerMode(enabled) {
   isOwner = enabled;
   document.body.classList.toggle("owner-mode", enabled);
@@ -108,7 +144,7 @@ function setOwnerMode(enabled) {
   if (!enabled) {
     editingDriveId = null;
     elements.message.value = "";
-    elements.analyze.textContent = "Generate placement brief";
+    showStep1();
   }
   render();
 }
@@ -126,7 +162,7 @@ function listenToDrives() {
   const drivesQuery = query(collection(db, "placementDrives"), orderBy("createdAt", "desc"));
   unsubscribeDrives = onSnapshot(drivesQuery, (snapshot) => {
     if (elements.localDataOnly.checked) return;
-    drives = snapshot.docs.map((driveDoc) => ({ id: driveDoc.id, ...driveDoc.data() }));
+    drives = snapshot.docs.map((driveDoc) => ({ ...driveDoc.data(), id: driveDoc.id }));
     render();
   }, (error) => {
     console.error(error);
@@ -169,6 +205,7 @@ async function saveDrive(drive) {
     updatedAt: serverTimestamp(),
     updatedBy: currentUser?.email || "unknown",
   };
+  delete payload.id;
 
   if (editingDriveId) {
     await setDoc(doc(db, "placementDrives", editingDriveId), payload, { merge: true });
@@ -375,10 +412,8 @@ function beginEdit(driveId) {
   const drive = drives.find((item) => item.id === driveId);
   if (!drive) return;
   editingDriveId = driveId;
-  elements.message.value = drive.original;
-  elements.audience.value = drive.audience;
-  elements.analyze.textContent = "Update placement brief";
-  elements.message.focus();
+  showStep2(drive);
+  elements.editCompany.focus();
 }
 
 async function deleteDrive(driveId) {
@@ -631,6 +666,35 @@ elements.analyze.addEventListener("click", async () => {
     drive = analyzeMessage(message, elements.audience.value);
   }
 
+  elements.analyze.disabled = false;
+  showStep2(drive);
+});
+
+elements.cancelEdit.addEventListener("click", () => {
+  editingDriveId = null;
+  elements.message.value = "";
+  showStep1();
+});
+
+elements.save.addEventListener("click", async () => {
+  const driveId = editingDriveId || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
+  const existingDrive = editingDriveId ? drives.find((item) => item.id === editingDriveId) : null;
+  const drive = {
+    id: driveId,
+    company: elements.editCompany.value.trim(),
+    role: elements.editRole.value.trim(),
+    packageText: elements.editPackage.value.trim(),
+    branches: elements.editBranches.value.trim(),
+    summary: elements.editSummary.value.trim(),
+    prep: elements.editPrep.value.split("\n").map(s => s.trim()).filter(Boolean),
+    audience: elements.audience.value,
+    original: elements.message.value || (existingDrive ? existingDrive.original : ""),
+    createdAt: existingDrive ? existingDrive.createdAt : new Date().toISOString()
+  };
+
+  elements.save.disabled = true;
+  elements.save.textContent = "Saving...";
+
   try {
     await saveDrive(drive);
   } catch (error) {
@@ -645,11 +709,12 @@ elements.analyze.addEventListener("click", async () => {
     saveDrives();
     render();
   } finally {
-    elements.analyze.disabled = false;
-    elements.analyze.textContent = "Generate placement brief";
+    elements.save.disabled = false;
+    elements.save.textContent = "Save placement drive";
   }
 
   elements.message.value = "";
+  showStep1();
   render();
 });
 
