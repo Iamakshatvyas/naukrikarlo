@@ -46,12 +46,11 @@ Location: PAN India.
 Interested eligible students must fill the registration form shared in the group.`;
 
 const defaults = [
-  analyzeMessage(sampleMessage, "Open", "All eligible students"),
+  analyzeMessage(sampleMessage, "All eligible students"),
 ];
 
 const elements = {
   message: document.querySelector("#tpoMessage"),
-  status: document.querySelector("#manualStatus"),
   audience: document.querySelector("#manualAudience"),
   analyze: document.querySelector("#analyzeBtn"),
   seed: document.querySelector("#seedBtn"),
@@ -61,7 +60,6 @@ const elements = {
   search: document.querySelector("#searchInput"),
   branch: document.querySelector("#branchFilter"),
   total: document.querySelector("#totalCount"),
-  open: document.querySelector("#openCount"),
   topPackage: document.querySelector("#avgPackage"),
   apiKey: document.querySelector("#apiKey"),
   model: document.querySelector("#modelName"),
@@ -313,14 +311,6 @@ function extractRole(message) {
   ], "Role to be confirmed");
 }
 
-function extractDeadline(message) {
-  return matchFirst(message, [
-    /(?:last date|deadline|register by|apply by|before)\s*[:\-]?\s*([^\n]+)/i,
-    /(\d{1,2}\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*\d{2,4})/i,
-    /(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})/i,
-  ], "Not mentioned");
-}
-
 function extractProcess(message) {
   const process = [];
   [
@@ -360,7 +350,7 @@ function buildPrep(message, role, process) {
   return [...prep].slice(0, 8);
 }
 
-function analyzeMessage(message, status, audience) {
+function analyzeMessage(message, audience) {
   const role = extractRole(message);
   const process = extractProcess(message);
   const company = extractCompany(message);
@@ -373,8 +363,6 @@ function analyzeMessage(message, status, audience) {
     role,
     packageText,
     branches,
-    deadline: extractDeadline(message),
-    status,
     audience,
     summary: `${company} is hiring for ${role.toLowerCase()}. The drive is for eligible students to enter a trainee or intern track, with final selection depending on the official criteria, rounds and internship/job conditions mentioned by the TPO.`,
     prep: buildPrep(message, role, process),
@@ -388,7 +376,6 @@ function beginEdit(driveId) {
   if (!drive) return;
   editingDriveId = driveId;
   elements.message.value = drive.original;
-  elements.status.value = drive.status;
   elements.audience.value = drive.audience;
   elements.analyze.textContent = "Update placement brief";
   elements.message.focus();
@@ -404,8 +391,8 @@ async function deleteDrive(driveId) {
   render();
 }
 
-function normalizeAiDrive(aiDrive, message, status, audience) {
-  const fallback = analyzeMessage(message, status, audience);
+function normalizeAiDrive(aiDrive, message, audience) {
+  const fallback = analyzeMessage(message, audience);
   const prep = Array.isArray(aiDrive.prep) ? aiDrive.prep.filter(Boolean) : fallback.prep;
 
   return {
@@ -414,20 +401,18 @@ function normalizeAiDrive(aiDrive, message, status, audience) {
     role: clean(aiDrive.role) || fallback.role,
     packageText: clean(aiDrive.packageText) || fallback.packageText,
     branches: clean(aiDrive.branches) || fallback.branches,
-    deadline: clean(aiDrive.deadline) || fallback.deadline,
     summary: clean(aiDrive.summary) || fallback.summary,
     prep: prep.length ? prep.slice(0, 8) : fallback.prep,
     original: message,
-    status,
     audience,
   };
 }
 
-async function analyzeWithAi(message, status, audience) {
+async function analyzeWithAi(message, audience) {
   if (elements.localAiOnly.checked) {
     localStorage.setItem(localAiOnlyStorageKey, "true");
     elements.aiStatus.textContent = "Used local extractor only. Gemini was not called.";
-    return analyzeMessage(message, status, audience);
+    return analyzeMessage(message, audience);
   }
 
   localStorage.setItem(localAiOnlyStorageKey, "false");
@@ -454,7 +439,7 @@ async function analyzeWithAi(message, status, audience) {
           role: "user",
           parts: [
             {
-              text: `Extract campus placement drive details for Indian college students. Return only valid JSON with these exact keys: company, role, packageText, branches, deadline, summary, prep. The prep value must be an array of 5 to 8 specific topics, skills, technologies, or interview rounds the student should prepare, based EXACTLY on what the company wants and the selection process mentioned in the message. Keep unknown details as "Not mentioned".\n\nTPO message:\n${message}`,
+              text: `Extract campus placement drive details for Indian college students. Return only valid JSON with these exact keys: company, role, packageText, branches, summary, prep. The prep value must be an array of 5 to 8 specific topics, skills, technologies, or interview rounds the student should prepare, based EXACTLY on what the company wants and the selection process mentioned in the message. Keep unknown details as "Not mentioned".\n\nTPO message:\n${message}`,
             },
           ],
         },
@@ -468,14 +453,14 @@ async function analyzeWithAi(message, status, audience) {
             role: { type: "string" },
             packageText: { type: "string" },
             branches: { type: "string" },
-            deadline: { type: "string" },
+
             summary: { type: "string" },
             prep: {
               type: "array",
               items: { type: "string" },
             },
           },
-          required: ["company", "role", "packageText", "branches", "deadline", "summary", "prep"],
+          required: ["company", "role", "packageText", "branches", "summary", "prep"],
         },
       },
     }),
@@ -483,23 +468,23 @@ async function analyzeWithAi(message, status, audience) {
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(errorText || `Gemini request failed with status ${response.status}`);
+    throw new Error(errorText || `Gemini request failed with error ${response.status}`);
   }
 
   const data = await response.json();
   const outputText = data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") || "";
   const aiDrive = JSON.parse(outputText);
   elements.aiStatus.textContent = "Gemini brief generated successfully.";
-  return normalizeAiDrive(aiDrive, message, status, audience);
+  return normalizeAiDrive(aiDrive, message, audience);
 }
 
-async function analyzeWithOpenAi(message, status, audience) {
+async function analyzeWithOpenAi(message, audience) {
   const apiKey = elements.apiKey.value.trim();
   const model = elements.model.value.trim() || "gpt-4.1-mini";
 
   if (!apiKey) {
     elements.aiStatus.textContent = "No API key found, so I used the local extractor.";
-    return analyzeMessage(message, status, audience);
+    return analyzeMessage(message, audience);
   }
 
   localStorage.setItem(apiKeyStorageKey, apiKey);
@@ -521,7 +506,7 @@ async function analyzeWithOpenAi(message, status, audience) {
         },
         {
           role: "user",
-          content: `Read this TPO message and return JSON with these exact keys: company, role, packageText, branches, deadline, summary, prep. The prep value must be an array of 5 to 8 short topics students should prepare. Keep unknown details as "Not mentioned".\n\nTPO message:\n${message}`,
+          content: `Read this TPO message and return JSON with these exact keys: company, role, packageText, branches, summary, prep. The prep value must be an array of 5 to 8 short topics students should prepare. Keep unknown details as "Not mentioned".\n\nTPO message:\n${message}`,
         },
       ],
       text: {
@@ -536,14 +521,14 @@ async function analyzeWithOpenAi(message, status, audience) {
               role: { type: "string" },
               packageText: { type: "string" },
               branches: { type: "string" },
-              deadline: { type: "string" },
+
               summary: { type: "string" },
               prep: {
                 type: "array",
                 items: { type: "string" },
               },
             },
-            required: ["company", "role", "packageText", "branches", "deadline", "summary", "prep"],
+            required: ["company", "role", "packageText", "branches", "summary", "prep"],
           },
         },
       },
@@ -552,14 +537,14 @@ async function analyzeWithOpenAi(message, status, audience) {
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(errorText || `AI request failed with status ${response.status}`);
+    throw new Error(errorText || `AI request failed with error ${response.status}`);
   }
 
   const data = await response.json();
   const outputText = data.output_text || data.output?.flatMap((item) => item.content || []).map((item) => item.text).join("");
   const aiDrive = JSON.parse(outputText);
   elements.aiStatus.textContent = "AI brief generated successfully.";
-  return normalizeAiDrive(aiDrive, message, status, audience);
+  return normalizeAiDrive(aiDrive, message, audience);
 }
 
 function packageNumber(packageText) {
@@ -577,7 +562,7 @@ function render() {
   });
 
   elements.total.textContent = String(drives.length);
-  elements.open.textContent = String(drives.filter((drive) => drive.status !== "Closed").length);
+
   const top = drives.reduce((best, drive) => Math.max(best, packageNumber(drive.packageText)), 0);
   elements.topPackage.textContent = top ? `${top} LPA` : "--";
 
@@ -594,10 +579,10 @@ function render() {
     const node = elements.template.content.cloneNode(true);
     node.querySelector(".company").textContent = drive.company;
     node.querySelector(".role").textContent = drive.role;
-    node.querySelector(".drive-status").textContent = drive.status;
+
     node.querySelector(".package").textContent = drive.packageText;
     node.querySelector(".branches").textContent = drive.branches;
-    node.querySelector(".deadline").textContent = drive.deadline;
+
     node.querySelector(".summary").textContent = drive.summary;
     node.querySelector(".original").textContent = drive.original;
     if (isOwner) {
@@ -639,11 +624,11 @@ elements.analyze.addEventListener("click", async () => {
   elements.analyze.textContent = "Generating...";
   let drive;
   try {
-    drive = await analyzeWithAi(message, elements.status.value, elements.audience.value);
+    drive = await analyzeWithAi(message, elements.audience.value);
   } catch (error) {
     console.error(error);
     elements.aiStatus.textContent = `AI failed, so I used the local extractor. ${friendlyError(error)}`;
-    drive = analyzeMessage(message, elements.status.value, elements.audience.value);
+    drive = analyzeMessage(message, elements.audience.value);
   }
 
   try {
