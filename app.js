@@ -86,7 +86,7 @@ let unsubscribeDrives = null;
 elements.apiKey.value = localStorage.getItem(apiKeyStorageKey) || "";
 elements.model.value = localStorage.getItem(modelStorageKey) || "gemini-2.5-flash";
 elements.localAiOnly.checked = localStorage.getItem(localAiOnlyStorageKey) !== "false";
-elements.localDataOnly.checked = localStorage.getItem(localDataOnlyStorageKey) !== "false";
+elements.localDataOnly.checked = localStorage.getItem(localDataOnlyStorageKey) === "true";
 
 function loadDrives() {
   try {
